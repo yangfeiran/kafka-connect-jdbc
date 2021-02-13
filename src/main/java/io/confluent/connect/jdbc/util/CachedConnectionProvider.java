@@ -1,17 +1,16 @@
 /*
- *  Copyright 2016 Confluent Inc.
+ * Copyright 2018 Confluent Inc.
  *
- *  Licensed under the Apache License, Version 2.0 (the "License");
- *  you may not use this file except in compliance with the License.
- *  You may obtain a copy of the License at
+ * Licensed under the Confluent Community License (the "License"); you may not use
+ * this file except in compliance with the License.  You may obtain a copy of the
+ * License at
  *
- *  http://www.apache.org/licenses/LICENSE-2.0
+ * http://www.confluent.io/confluent-community-license
  *
- *  Unless required by applicable law or agreed to in writing, software
- *  distributed under the License is distributed on an "AS IS" BASIS,
- *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *  See the License for the specific language governing permissions and
- *  limitations under the License.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+ * WARRANTIES OF ANY KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations under the License.
  */
 
 package io.confluent.connect.jdbc.util;
@@ -21,38 +20,39 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.sql.Connection;
-import java.sql.DriverManager;
 import java.sql.SQLException;
 
-public class CachedConnectionProvider {
+public class CachedConnectionProvider implements ConnectionProvider {
 
   private static final Logger log = LoggerFactory.getLogger(CachedConnectionProvider.class);
 
   private static final int VALIDITY_CHECK_TIMEOUT_S = 5;
 
-  private final String url;
-  private final String username;
-  private final String password;
+  private final ConnectionProvider provider;
+  private final int maxConnectionAttempts;
+  private final long connectionRetryBackoff;
 
+  private int count = 0;
   private Connection connection;
 
-  public CachedConnectionProvider(String url) {
-    this(url, null, null);
+  public CachedConnectionProvider(
+      ConnectionProvider provider,
+      int maxConnectionAttempts,
+      long connectionRetryBackoff
+  ) {
+    this.provider = provider;
+    this.maxConnectionAttempts = maxConnectionAttempts;
+    this.connectionRetryBackoff = connectionRetryBackoff;
   }
 
-  public CachedConnectionProvider(String url, String username, String password) {
-    this.url = url;
-    this.username = username;
-    this.password = password;
-  }
-
-  public synchronized Connection getValidConnection() {
+  @Override
+  public synchronized Connection getConnection() {
     try {
       if (connection == null) {
         newConnection();
-      } else if (!connection.isValid(VALIDITY_CHECK_TIMEOUT_S)) {
+      } else if (!isConnectionValid(connection, VALIDITY_CHECK_TIMEOUT_S)) {
         log.info("The database connection is invalid. Reconnecting...");
-        closeQuietly();
+        close();
         newConnection();
       }
     } catch (SQLException sqle) {
@@ -61,21 +61,64 @@ public class CachedConnectionProvider {
     return connection;
   }
 
-  private void newConnection() throws SQLException {
-    log.debug("Attempting to connect to {}", url);
-    connection = DriverManager.getConnection(url, username, password);
-    onConnect(connection);
+  @Override
+  public boolean isConnectionValid(
+      Connection connection,
+      int timeout
+  ) throws SQLException {
+    try {
+      return provider.isConnectionValid(connection, timeout);
+    } catch (SQLException sqle) {
+      log.debug("Unable to check if the underlying connection is valid", sqle);
+      return false;
+    }
   }
 
-  public synchronized void closeQuietly() {
-    if (connection != null) {
+  private void newConnection() throws SQLException {
+    int attempts = 0;
+    while (attempts < maxConnectionAttempts) {
       try {
-        connection.close();
-        connection = null;
+        ++count;
+        log.info("Attempting to open connection #{} to {}", count, provider);
+        connection = provider.getConnection();
+        onConnect(connection);
+        return;
       } catch (SQLException sqle) {
-        log.warn("Ignoring error closing connection", sqle);
+        attempts++;
+        if (attempts < maxConnectionAttempts) {
+          log.info("Unable to connect to database on attempt {}/{}. Will retry in {} ms.", attempts,
+                   maxConnectionAttempts, connectionRetryBackoff, sqle
+          );
+          try {
+            Thread.sleep(connectionRetryBackoff);
+          } catch (InterruptedException e) {
+            // this is ok because just woke up early
+          }
+        } else {
+          throw sqle;
+        }
       }
     }
+  }
+
+  @Override
+  public synchronized void close() {
+    if (connection != null) {
+      try {
+        log.info("Closing connection #{} to {}", count, provider);
+        connection.close();
+      } catch (SQLException sqle) {
+        log.warn("Ignoring error closing connection", sqle);
+      } finally {
+        connection = null;
+        provider.close();
+      }
+    }
+  }
+
+  @Override
+  public String identifier() {
+    return provider.identifier();
   }
 
   protected void onConnect(Connection connection) throws SQLException {

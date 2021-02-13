@@ -1,18 +1,17 @@
-/**
- * Copyright 2015 Confluent Inc.
+/*
+ * Copyright 2018 Confluent Inc.
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
+ * Licensed under the Confluent Community License (the "License"); you may not use
+ * this file except in compliance with the License.  You may obtain a copy of the
+ * License at
  *
- * http://www.apache.org/licenses/LICENSE-2.0
+ * http://www.confluent.io/confluent-community-license
  *
  * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- **/
+ * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+ * WARRANTIES OF ANY KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations under the License.
+ */
 
 package io.confluent.connect.jdbc.source;
 
@@ -28,16 +27,19 @@ import org.apache.kafka.connect.source.SourceRecord;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.junit.runners.Parameterized;
 
+import javax.sql.rowset.serial.SerialBlob;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.nio.ByteBuffer;
+import java.util.Arrays;
 import java.util.Calendar;
+import java.util.Collection;
 import java.util.GregorianCalendar;
 import java.util.List;
 import java.util.TimeZone;
-
-import javax.sql.rowset.serial.SerialBlob;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
@@ -45,12 +47,29 @@ import static org.junit.Assert.assertTrue;
 // Tests conversion of data types and schemas. These use the types supported by Derby, which
 // might not cover everything in the SQL standards and definitely doesn't cover any non-standard
 // types, but should cover most of the JDBC types which is all we see anyway
+@RunWith(Parameterized.class)
 public class JdbcSourceTaskConversionTest extends JdbcSourceTaskTestBase {
+
+  @Parameterized.Parameters(name="extendedMapping: {0}, timezone: {1}")
+  public static Collection<Object[]> mapping() {
+    return Arrays.asList(new Object[][] {
+        {false, TimeZone.getTimeZone("UTC")},
+        {true, TimeZone.getTimeZone("UTC")},
+        {false, TimeZone.getTimeZone("America/Los_Angeles")},
+        {true, TimeZone.getTimeZone("Asia/Kolkata")}
+    });
+  }
+
+  @Parameterized.Parameter(0)
+  public boolean extendedMapping;
+
+  @Parameterized.Parameter(1)
+  public TimeZone timezone;
 
   @Before
   public void setup() throws Exception {
     super.setup();
-    task.start(singleTableConfig());
+    task.start(singleTableWithTimezoneConfig(extendedMapping, timezone));
   }
 
   @After
@@ -249,7 +268,7 @@ public class JdbcSourceTaskConversionTest extends JdbcSourceTaskTestBase {
   @Test
   public void testTime() throws Exception {
     GregorianCalendar expected = new GregorianCalendar(1970, Calendar.JANUARY, 1, 23, 3, 20);
-    expected.setTimeZone(TimeZone.getTimeZone("UTC"));
+    expected.setTimeZone(timezone);
     typeConversion("TIME", false, "23:03:20",
                    Time.builder().build(),
                    expected.getTime());
@@ -258,7 +277,7 @@ public class JdbcSourceTaskConversionTest extends JdbcSourceTaskTestBase {
   @Test
   public void testNullableTime() throws Exception {
     GregorianCalendar expected = new GregorianCalendar(1970, Calendar.JANUARY, 1, 23, 3, 20);
-    expected.setTimeZone(TimeZone.getTimeZone("UTC"));
+    expected.setTimeZone(timezone);
     typeConversion("TIME", true, "23:03:20",
                    Time.builder().optional().build(),
                    expected.getTime());
@@ -270,7 +289,7 @@ public class JdbcSourceTaskConversionTest extends JdbcSourceTaskTestBase {
   @Test
   public void testTimestamp() throws Exception {
     GregorianCalendar expected = new GregorianCalendar(1977, Calendar.FEBRUARY, 13, 23, 3, 20);
-    expected.setTimeZone(TimeZone.getTimeZone("UTC"));
+    expected.setTimeZone(timezone);
     typeConversion("TIMESTAMP", false, "1977-02-13 23:03:20",
                    Timestamp.builder().build(),
                    expected.getTime());
@@ -279,7 +298,7 @@ public class JdbcSourceTaskConversionTest extends JdbcSourceTaskTestBase {
   @Test
   public void testNullableTimestamp() throws Exception {
     GregorianCalendar expected = new GregorianCalendar(1977, Calendar.FEBRUARY, 13, 23, 3, 20);
-    expected.setTimeZone(TimeZone.getTimeZone("UTC"));
+    expected.setTimeZone(timezone);
     typeConversion("TIMESTAMP", true, "1977-02-13 23:03:20",
                    Timestamp.builder().optional().build(),
                    expected.getTime());
